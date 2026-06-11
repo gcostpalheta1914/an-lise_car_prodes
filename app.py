@@ -15,11 +15,11 @@ st.set_page_config(page_title="Analisador CAR x PRODES", page_icon="🗺️", la
 credentials = {
     "usernames": {
         "admin": {
-            "name": "Administrador",
-            "password": "SenhaDificil123"  # Troque pela senha que desejar
+            "name": "GabrielPalheta",
+            "password": "Gab1914."  # Troque pela senha que desejar
         },
         "usuario1": {
-            "name": "Colaborador 01",
+            "name": "Bem vindo",
             "password": "OutraSenhaAqui"
         }
     }
