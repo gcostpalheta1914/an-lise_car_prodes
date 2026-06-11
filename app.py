@@ -14,7 +14,7 @@ st.set_page_config(page_title="Analisador CAR x PRODES", page_icon="🗺️", la
 # --- CONFIGURAÇÃO DE SEGURANÇA (LOGIN) ---
 credentials = {
     "usernames": {
-        "admin": {
+        "gabriel": {
             "name": "GabrielPalheta",
             "password": "Gab1914."  # Troque pela senha que desejar
         },
