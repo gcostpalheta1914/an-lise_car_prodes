@@ -6,47 +6,47 @@ import geopandas as gpd
 import pandas as pd
 import re
 from shapely.geometry import box
-import streamlit_authenticator as stauth
 
-# --- CONFIGURAÇÃO DA PÁGINA (Deve ser a primeira coisa do Streamlit) ---
+# --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Analisador CAR x PRODES", page_icon="🗺️", layout="centered")
 
-# --- CONFIGURAÇÃO DE SEGURANÇA (LOGIN) ---
-# As senhas agora usam criptografia segura para a biblioteca aceitar o acesso
-credentials = {
-    "usernames": {
-        "gabriel": {
-            "name": "GabrielPalheta",
-            "password": "$2b$12$EixZaYvkVv8S991BvQxYtO8P80bW0u8pXBXbC2K7h1e7h5K0gZ1vW"  # Criptografia para: Gab1914.
-        },
-        "usuario1": {
-            "name": "Bem vindo",
-            "password": "$2b$12$3k6b8h88H8M8k8y8v8e8uO8pXBXbC2K7h1e7h5K0gZ1vW77777777"  # Criptografia para: OutraSenhaAqui
-        }
-    }
-}
+# --- SISTEMA DE LOGIN DIRETO E SEGURO ---
+def verificar_login():
+    """Retorna True se o usuário e senha estiverem corretos"""
+    if "autenticado" not in st.session_state:
+        st.session_state["autenticado"] = False
 
-# Cria o gerenciador de autenticação atualizado
-authenticator = stauth.Authenticate(
-    credentials,
-    "cookie_car_prodes",
-    "chave_secreta_123",
-    cookie_expiry_days=1
-)
+    if st.session_state["autenticado"]:
+        return True
 
-# Renderiza a tela de login
-authenticator.login()
+    # Tela de Login visual
+    st.title("🔒 Acesso ao Sistema")
+    st.markdown("Por favor, insira suas credenciais de administrador para acessar a ferramenta.")
+    
+    usuario_input = st.text_input("Usuário", key="user_input")
+    senha_input = st.text_input("Senha", type="password", key="password_input")
+    
+    if st.button("Entrar"):
+        # AQI VOCÊ ADMINISTRA SEUS USUÁRIOS E SENHAS DIRETO:
+        if usuario_input == "gabriel" and senha_input == "Gab1914.":
+            st.session_state["autenticado"] = True
+            st.rerun()
+        elif usuario_input == "usuario1" and senha_input == "OutraSenhaAqui":
+            st.session_state["autenticado"] = True
+            st.rerun()
+        else:
+            st.error("❌ Usuário ou senha incorretos.")
+            
+    return False
 
 # --- VERIFICAÇÃO DE ACESSO ---
-if st.session_state["authentication_status"] == False:
-    st.error('❌ Usuário ou senha incorretos.')
-elif st.session_state["authentication_status"] == None:
-    st.warning('🔒 Por favor, insira seu usuário e senha para acessar a ferramenta.')
-elif st.session_state["authentication_status"]:
+if verificar_login():
     
-    # Se o login der certo, mostra quem está logado e o botão de sair na barra lateral
-    st.sidebar.title(f"Bem-vindo, {st.session_state['name']}!")
-    authenticator.logout('Sair do Sistema', 'sidebar')
+    # Se o login der certo, mostra o botão de logout na barra lateral
+    st.sidebar.title("👋 Bem-vindo, Gabriel!")
+    if st.sidebar.button("Sair do Sistema"):
+        st.session_state["autenticado"] = False
+        st.rerun()
 
     # --- CORPO DO SISTEMA DO CAR x PRODES ---
     st.title("🗺️ Detector de Passivos: CAR vs PRODES")
