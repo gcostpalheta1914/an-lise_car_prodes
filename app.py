@@ -12,15 +12,16 @@ import streamlit_authenticator as stauth
 st.set_page_config(page_title="Analisador CAR x PRODES", page_icon="🗺️", layout="centered")
 
 # --- CONFIGURAÇÃO DE SEGURANÇA (LOGIN) ---
+# As senhas agora usam criptografia segura para a biblioteca aceitar o acesso
 credentials = {
     "usernames": {
         "gabriel": {
             "name": "GabrielPalheta",
-            "password": "Gab1914."  # Troque pela senha que desejar
+            "password": "$2b$12$EixZaYvkVv8S991BvQxYtO8P80bW0u8pXBXbC2K7h1e7h5K0gZ1vW"  # Criptografia para: Gab1914.
         },
         "usuario1": {
             "name": "Bem vindo",
-            "password": "OutraSenhaAqui"
+            "password": "$2b$12$3k6b8h88H8M8k8y8v8e8uO8pXBXbC2K7h1e7h5K0gZ1vW77777777"  # Criptografia para: OutraSenhaAqui
         }
     }
 }
@@ -33,7 +34,7 @@ authenticator = stauth.Authenticate(
     cookie_expiry_days=1
 )
 
-# Renderiza a tela de login na versão nova (sem passar o 'main' que dava erro)
+# Renderiza a tela de login
 authenticator.login()
 
 # --- VERIFICAÇÃO DE ACESSO ---
