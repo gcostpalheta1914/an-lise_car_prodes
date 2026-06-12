@@ -113,7 +113,7 @@ if verificar_login():
                 if not shapes_cars:
                     st.error("❌ Nenhum polígono válido do CAR foi localizado no pacote enviado.")
                 else:
-                    with st.spinner("⚔️ Cruzando dados espaciais via Indexação Rápida..."):
+                    with st.spinner("⚔️ Executando Cruzamento Otimizado (Filtro Rápido + Recorte Exato)..."):
                         coluna_ano_prodes = next((col for col in gdf_prodes_real.columns if col.lower() in ['ano', 'year', 'class_name', 'class']), None)
                         linhas_finais = []
                         
@@ -123,43 +123,56 @@ if verificar_login():
                                 gdf_imovel = gpd.read_file(os.path.join(pasta_shapes_finais, shp))
                                 if gdf_imovel.crs is None: gdf_imovel.set_crs("EPSG:4674", inplace=True)
                                 
-                                # Ajusta o CRS se necessário
                                 if gdf_prodes_real.crs != gdf_imovel.crs:
                                     gdf_imovel = gdf_imovel.to_crs(gdf_prodes_real.crs)
                                 
-                                # NOVO MOTOR: Mapeamento por junção espacial acelerada (sjoin)
-                                correspondencias = gpd.sjoin(gdf_imovel, gdf_prodes_real, how="inner", predicate="intersects")
+                                # PASSO 1: Pré-filtro espacial rápido (sjoin) para achar apenas o PRODES que interessa
+                                prodes_concorrentes = gpd.sjoin(gdf_prodes_real, gdf_imovel, how="inner", predicate="intersects")
                                 
-                                if not correspondencias.empty and coluna_ano_prodes:
-                                    # Agrupa os anos detectados tirando duplicados
-                                    anos_detectados = []
-                                    for val in correspondencias[coluna_ano_prodes].unique():
-                                        numeros = re.findall(r'\d+', str(val))
-                                        if numeros:
-                                            anos_detectados.append(int(numeros[0]))
+                                if not prodes_concorrentes.empty:
+                                    # Limpa colunas do sjoin para evitar conflito no overlay
+                                    prodes_concorrentes = prodes_concorrentes.drop(columns=['index_right'], errors='ignore')
                                     
-                                    if anos_detectados:
-                                        texto_anos = ", ".join(sorted(list(set(map(str, anos_detectados)))))
+                                    # PASSO 2: Recorte preciso (overlay) apenas nos polígonos pré-filtrados
+                                    intersecao_real = gpd.overlay(gdf_imovel, prodes_concorrentes, how='intersection')
+                                    
+                                    if not intersecao_real.empty:
+                                        # Projeta para UTM para calcular a área exata em hectares (HA)
+                                        intersecao_utm = intersecao_real.to_crs(epsg=31981)
+                                        intersecao_real['area_calculada_ha'] = intersecao_utm.geometry.area / 10000
                                         
-                                        # Calcula área aproximada convertendo rápido para UTM
-                                        gdf_imovel_utm = gdf_imovel.to_crs(epsg=31981)
-                                        area_ha = round(gdf_imovel_utm.geometry.area.sum() / 10000, 2)
+                                        anos_detectados = set()
+                                        area_acumulada_prodes = 0.0
+                                        
+                                        for _, row in intersecao_real.iterrows():
+                                            area_linha = row['area_calculada_ha']
+                                            if area_linha > 0.001:  # Ignora微 ruidos geométricos menores que 10m²
+                                                area_acumulada_prodes += area_linha
+                                                if coluna_ano_prodes:
+                                                    numeros = re.findall(r'\d+', str(row[coluna_ano_prodes]))
+                                                    if numeros:
+                                                        anos_detectados.add(str(numeros[0]))
+                                        
+                                        if anos_detectados:
+                                            texto_anos = ", ".join(sorted(list(anos_detectados)))
+                                            area_final_ha = round(area_acumulada_prodes, 2)
+                                        else:
+                                            texto_anos = "Sem PRODES"
+                                            area_final_ha = 0.0
                                     else:
-                                        texto_anos = "Inconclusivo"
-                                        area_ha = 0.0
-                                        
-                                    linhas_finais.append({
-                                        'Identificador_do_CAR': car_id_limpo, 
-                                        'Anos_com_Incidencia_PRODES': texto_anos, 
-                                        'Area_Total_PRODES_HA': area_ha
-                                    })
+                                        texto_anos = "Sem PRODES"
+                                        area_final_ha = 0.0
                                 else:
-                                    linhas_finais.append({
-                                        'Identificador_do_CAR': car_id_limpo, 
-                                        'Anos_com_Incidencia_PRODES': 'Sem PRODES', 
-                                        'Area_Total_PRODES_HA': 0.0
-                                    })
-                            except:
+                                    texto_anos = "Sem PRODES"
+                                    area_final_ha = 0.0
+                                    
+                                linhas_finais.append({
+                                    'Identificador_do_CAR': car_id_limpo, 
+                                    'Anos_com_Incidencia_PRODES': texto_anos, 
+                                    'Area_Total_PRODES_HA': area_final_ha
+                                })
+                                
+                            except Exception as e:
                                 linhas_finais.append({
                                     'Identificador_do_CAR': car_id_limpo, 
                                     'Anos_com_Incidencia_PRODES': 'Erro na análise', 
@@ -168,7 +181,7 @@ if verificar_login():
                         
                         df_final = pd.DataFrame(linhas_finais).sort_values(by='Identificador_do_CAR')
                         
-                        st.success("🎉 Mapeamento concluído com sucesso!")
+                        st.success("🎉 Mapeamento preciso concluído!")
                         st.dataframe(df_final)
                         
                         nome_saida = 'Relatorio_PRODES_Fixo.xlsx'
