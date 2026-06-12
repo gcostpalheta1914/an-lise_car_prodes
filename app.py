@@ -1,72 +1,57 @@
 import streamlit as st
 import os, zipfile, shutil, geopandas as gpd, pandas as pd, io
 
-st.set_page_config(page_title="Detector de Passivos", layout="centered")
+st.set_page_config(page_title="Mapeamento CAR x PRODES", layout="wide")
 
+# --- LOGIN ---
 if "auth" not in st.session_state: st.session_state.auth = False
 
-# --- FUNÇÃO DE CARGA DO PRODES ---
-def carregar_prodes():
-    bytes_totais = bytearray()
-    i = 1
-    while os.path.exists(f"prodes_otimizado.parquet.part{i}"):
-        with open(f"prodes_otimizado.parquet.part{i}", "rb") as f: bytes_totais.extend(f.read())
-        i += 1
-    if not bytes_totais: return None
-    gdf = gpd.read_parquet(io.BytesIO(bytes_totais))
-    # Força o CRS para SIRGAS 2000
-    if gdf.crs is None: gdf.set_crs("EPSG:4674", inplace=True)
-    return gdf
-
-# --- TELA DE LOGIN ---
 if not st.session_state.auth:
-    st.title("🔒 Acesso ao Sistema")
+    st.title("🔒 Acesso")
     if st.text_input("Senha", type="password") == "Gab1914.":
         st.session_state.auth = True
         st.rerun()
 else:
-    st.title("🗺️ Detector de Passivos: CAR vs PRODES")
-    arquivo = st.file_uploader("Suba o arquivo CARS.zip", type=["zip"])
-    
-    if arquivo and st.button("🚀 Rodar Processamento"):
-        st.write("Iniciando processamento...")
-        base = 'tmp_data'
-        if os.path.exists(base): shutil.rmtree(base)
-        os.makedirs(base)
-        
-        with zipfile.ZipFile(arquivo, 'r') as z: z.extractall(base)
-        
-        prodes = carregar_prodes()
-        resultados = []
-        
-        # Procura arquivos SHP em qualquer subpasta
-        for root, dirs, files in os.walk(base):
-            for file in files:
-                if file.endswith(".shp"):
+    st.title("🗺️ Analisador Geográfico: CAR vs PRODES")
+    st.markdown("Nesta versão, você faz o upload de ambas as bases para garantir precisão total.")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        prodes_file = st.file_uploader("1. Suba a base PRODES (.zip ou .parquet)", type=["zip", "parquet"])
+    with col2:
+        cars_file = st.file_uploader("2. Suba os CARs (.zip)", type=["zip"])
+
+    if st.button("🚀 Iniciar Cruzamento de Dados"):
+        if prodes_file and cars_file:
+            try:
+                # 1. Preparação de pastas
+                for p in ['tmp_prodes', 'tmp_cars']:
+                    if os.path.exists(p): shutil.rmtree(p)
+                    os.makedirs(p)
+
+                # 2. Carregando PRODES
+                with st.spinner("Lendo base PRODES..."):
+                    if prodes_file.name.endswith(".parquet"):
+                        gdf_prodes = gpd.read_parquet(prodes_file)
+                    else:
+                        with zipfile.ZipFile(prodes_file, 'r') as z: z.extractall('tmp_prodes')
+                        # Acha o .shp dentro do zip do prodes
+                        shp_prodes = [os.path.join(r, f) for r,d,fs in os.walk('tmp_prodes') if f.endswith('.shp')][0]
+                        gdf_prodes = gpd.read_file(shp_prodes)
+                    
+                    if gdf_prodes.crs is None: gdf_prodes.set_crs("EPSG:4674", inplace=True)
+                    gdf_prodes = gdf_prodes.to_crs("EPSG:4674")
+                    gdf_prodes['geometry'] = gdf_prodes.geometry.make_valid()
+
+                # 3. Carregando e Cruzando CARs
+                with zipfile.ZipFile(cars_file, 'r') as z: z.extractall('tmp_cars')
+                shapes_cars = [os.path.join(r, f) for r,d,fs in os.walk('tmp_cars') if f.endswith('.shp')]
+                
+                resultados = []
+                progresso = st.progress(0)
+                
+                for idx, shp_path in enumerate(shapes_cars):
                     try:
-                        caminho = os.path.join(root, file)
-                        car = gpd.read_file(caminho)
-                        
-                        # Padroniza CRS
-                        if car.crs is None: car.set_crs("EPSG:4674", inplace=True)
-                        car = car.to_crs(prodes.crs)
-                        
-                        # Interseção
-                        inter = gpd.overlay(car, prodes, how='intersection')
-                        
-                        if not inter.empty:
-                            area_ha = inter.to_crs("EPSG:31982").geometry.area.sum() / 10000
-                            resultados.append({"CAR": file, "Area_Ha": round(area_ha, 2)})
-                    except Exception as e:
-                        st.write(f"Erro no arquivo {file}: {e}")
-                        continue
-        
-        if resultados:
-            df = pd.DataFrame(resultados)
-            st.dataframe(df)
-            st.download_button("📥 Baixar Resultados", df.to_csv(index=False), "resultado.csv", "text/csv")
-            st.success("Cruzamento concluído com sucesso!")
-        else:
-            st.warning("⚠️ O processamento rodou, mas nenhuma interseção foi encontrada. Verifique se os polígonos dos arquivos CAR realmente ocupam as mesmas áreas da sua base PRODES.")
-            
-        shutil.rmtree(base)
+                        gdf_car = gpd.read_file(shp_path)
+                        if gdf_car.crs is None: gdf_car.set_crs("EPSG:4674", inplace=True)
+                        gdf_car = gdf_car.to_
