@@ -25,21 +25,20 @@ def montar_base_prodes_em_tempo_real():
         return None
         
     try:
-        gdf = gpd.read_parquet(io.BytesIO(bytes_totais), engine='pyogrio')
+        gdf_prodes = gpd.read_parquet(io.BytesIO(bytes_totais), engine='pyogrio')
     except:
-        gdf = gpd.read_parquet(io.BytesIO(bytes_totais))
+        gdf_prodes = gpd.read_parquet(io.BytesIO(bytes_totais))
         
     colunas_uteis = ['geometry']
-    # Identifica a coluna de ano de forma muito mais ampla (maiúsculas, minúsculas, partes do nome)
-    coluna_ano = next((col for col in gdf.columns if 'ano' in col.lower() or 'year' in col.lower() or 'class' in col.lower() or 'data' in col.lower()), None)
+    coluna_ano = next((col for col in gdf_prodes.columns if 'ano' in col.lower() or 'year' in col.lower() or 'class' in col.lower() or 'data' in col.lower()), None)
     if coluna_ano:
         colunas_uteis.append(coluna_ano)
     
-    gdf = gdf[colunas_uteis]
-    if gdf.crs is None: 
-        gdf.set_crs("EPSG:4674", inplace=True)
+    gdf_prodes = gdf_prodes[colunas_uteis]
+    if gdf_prodes.crs is None: 
+        gdf_prodes.set_crs("EPSG:4674", inplace=True)
         
-    return gdf, coluna_ano
+    return gdf_prodes, coluna_ano
 
 # --- SISTEMA DE LOGIN ---
 def verificar_login():
@@ -143,7 +142,7 @@ if verificar_login():
                                 if gdf_prodes_real.crs != gdf_imovel.crs:
                                     gdf_imovel = gdf_imovel.to_crs(gdf_prodes_real.crs)
                                 
-                                # Realiza a interseção geométrica real
+                                # Motor Original de Alta Precisão (Interseção geométrica milimétrica)
                                 intersecao = gpd.overlay(gdf_imovel, gdf_prodes_real, how='intersection')
                                 
                                 if not intersecao.empty:
@@ -156,7 +155,6 @@ if verificar_login():
                                     
                                     for _, row in intersecao.iterrows():
                                         if row['area_ha'] > 0.0001:
-                                            # Resgate ultra-seguro do ano
                                             ano_val = "Identificado"
                                             if coluna_ano_prodes and coluna_ano_prodes in row:
                                                 numeros = re.findall(r'\d+', str(row[coluna_ano_prodes]))
@@ -175,7 +173,6 @@ if verificar_login():
                             for car_id, group in df_bruto.groupby('Identificador_do_CAR'):
                                 anos_validos = group[~group['Ano'].isin(['Sem PRODES', 'Erro na análise'])]
                                 if not anos_validos.empty:
-                                    # Junta os anos removendo duplicados e soma as áreas recortadas com precisão
                                     lista_anos = sorted(list(set(anos_validos['Ano'].astype(str))))
                                     texto_anos = ", ".join(lista_anos)
                                     area_total = round(anos_validos['Area'].sum(), 2)
@@ -191,8 +188,4 @@ if verificar_login():
                             nome_saida = 'Relatorio_PRODES_Preciso.xlsx'
                             df_final.to_excel(nome_saida, index=False)
                             with open(nome_saida, "rb") as file:
-                                st.download_button(label="📥 Baixar Planilha Excel Oficial", data=file, file_name=nome_saida, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                        else:
-                            st.warning("⚠️ Nenhuma informação pôde ser extraída dos shapes.")
-            
-            del gdf
+                                st.download_button(label="📥 Baixar Planilha Excel Oficial", data=file, file_name=nome_saida, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.
