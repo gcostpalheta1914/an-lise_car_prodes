@@ -30,7 +30,8 @@ def montar_base_prodes_em_tempo_real():
         gdf = gpd.read_parquet(io.BytesIO(bytes_totais))
         
     colunas_uteis = ['geometry']
-    coluna_ano = next((col for col in gdf.columns if col.lower() in ['ano', 'year', 'class_name', 'class']), None)
+    # Identifica a coluna de ano de forma muito mais ampla (maiúsculas, minúsculas, partes do nome)
+    coluna_ano = next((col for col in gdf.columns if 'ano' in col.lower() or 'year' in col.lower() or 'class' in col.lower() or 'data' in col.lower()), None)
     if coluna_ano:
         colunas_uteis.append(coluna_ano)
     
@@ -142,6 +143,7 @@ if verificar_login():
                                 if gdf_prodes_real.crs != gdf_imovel.crs:
                                     gdf_imovel = gdf_imovel.to_crs(gdf_prodes_real.crs)
                                 
+                                # Realiza a interseção geométrica real
                                 intersecao = gpd.overlay(gdf_imovel, gdf_prodes_real, how='intersection')
                                 
                                 if not intersecao.empty:
@@ -154,7 +156,13 @@ if verificar_login():
                                     
                                     for _, row in intersecao.iterrows():
                                         if row['area_ha'] > 0.0001:
-                                            ano_val = int(re.findall(r'\d+', str(row[coluna_ano_prodes]))[0]) if coluna_ano_prodes and re.findall(r'\d+', str(row[coluna_ano_prodes])) else "Inconclusivo"
+                                            # Resgate ultra-seguro do ano
+                                            ano_val = "Identificado"
+                                            if coluna_ano_prodes and coluna_ano_prodes in row:
+                                                numeros = re.findall(r'\d+', str(row[coluna_ano_prodes]))
+                                                if numeros:
+                                                    ano_val = int(numeros[0])
+                                            
                                             linhas_brutas.append({'Identificador_do_CAR': car_id_limpo, 'Ano': ano_val, 'Area': row['area_ha']})
                                 else:
                                     linhas_brutas.append({'Identificador_do_CAR': car_id_limpo, 'Ano': 'Sem PRODES', 'Area': 0.0})
@@ -165,9 +173,11 @@ if verificar_login():
                             df_bruto = pd.DataFrame(linhas_brutas)
                             linhas_finais = []
                             for car_id, group in df_bruto.groupby('Identificador_do_CAR'):
-                                anos_validos = group[~group['Ano'].isin(['Sem PRODES', 'Erro na análise', 'Inconclusivo'])]
+                                anos_validos = group[~group['Ano'].isin(['Sem PRODES', 'Erro na análise'])]
                                 if not anos_validos.empty:
-                                    texto_anos = ", ".join(sorted(list(set(anos_validos['Ano'].astype(str)))))
+                                    # Junta os anos removendo duplicados e soma as áreas recortadas com precisão
+                                    lista_anos = sorted(list(set(anos_validos['Ano'].astype(str))))
+                                    texto_anos = ", ".join(lista_anos)
                                     area_total = round(anos_validos['Area'].sum(), 2)
                                 else:
                                     texto_anos = 'Sem PRODES'
@@ -185,9 +195,4 @@ if verificar_login():
                         else:
                             st.warning("⚠️ Nenhuma informação pôde ser extraída dos shapes.")
             
-            del gdf_prodes_real
-            gc.collect()
-            for p in [base_extracao, pasta_shapes_finais, "cars_input.zip"]:
-                if os.path.exists(p): shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
-        else:
-            st.warning("⚠️ Por favor, insira o arquivo CARS.zip.")
+            del gdf
