@@ -4,31 +4,24 @@ import zipfile
 import shutil
 import geopandas as gpd
 import pandas as pd
-import re
 import io
 import gc
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Analisador CAR x PRODES", page_icon="🗺️", layout="centered")
+# --- CONFIGURAÇÃO ---
+st.set_page_config(page_title="Analisador CAR x PRODES", layout="centered")
 
-# --- FUNÇÃO DE MONTAGEM ---
-def montar_base_prodes_em_tempo_real():
+def montar_base_prodes():
     bytes_totais = bytearray()
-    contador_partes = 1
-    while os.path.exists(f"prodes_otimizado.parquet.part{contador_partes}"):
-        with open(f"prodes_otimizado.parquet.part{contador_partes}", "rb") as f_parte:
-            bytes_totais.extend(f_parte.read())
-        contador_partes += 1
-    if len(bytes_totais) == 0: return None
-    try:
-        gdf_prodes = gpd.read_parquet(io.BytesIO(bytes_totais), engine='pyogrio')
-    except:
-        gdf_prodes = gpd.read_parquet(io.BytesIO(bytes_totais))
-    coluna_ano = next((col for col in gdf_prodes.columns if 'ano' in col.lower() or 'year' in col.lower()), None)
-    if gdf_prodes.crs is None: gdf_prodes.set_crs("EPSG:4674", inplace=True)
-    return gdf_prodes, coluna_ano
+    i = 1
+    while os.path.exists(f"prodes_otimizado.parquet.part{i}"):
+        with open(f"prodes_otimizado.parquet.part{i}", "rb") as f: bytes_totais.extend(f.read())
+        i += 1
+    if not bytes_totais: return None
+    gdf = gpd.read_parquet(io.BytesIO(bytes_totais))
+    if gdf.crs is None: gdf.set_crs("EPSG:4674", inplace=True)
+    return gdf
 
-# --- SISTEMA DE LOGIN ---
+# --- UI ---
 if "autenticado" not in st.session_state: st.session_state["autenticado"] = False
 
 if not st.session_state["autenticado"]:
@@ -39,39 +32,47 @@ if not st.session_state["autenticado"]:
         if u == "gabriel" and p == "Gab1914.":
             st.session_state["autenticado"] = True
             st.rerun()
-        else: st.error("Erro")
 else:
-    st.title("🗺️ Detector de Passivos: CAR vs PRODES")
-    cars_file = st.file_uploader("Suba o arquivo CARS.zip", type=["zip"])
-    if st.button("🚀 Rodar Cruzamento"):
-        if cars_file:
-            base_extracao = 'tmp_cars'
-            if os.path.exists(base_extracao): shutil.rmtree(base_extracao)
-            os.makedirs(base_extracao)
-            with open("input.zip", "wb") as f: f.write(cars_file.getbuffer())
-            with zipfile.ZipFile("input.zip", 'r') as z: z.extractall(base_extracao)
+    st.title("🗺️ Detector de Passivos (Alta Precisão)")
+    file = st.file_uploader("Suba o CARS.zip", type=["zip"])
+    
+    if st.button("🚀 Rodar Processamento"):
+        if file:
+            base = 'tmp_data'
+            if os.path.exists(base): shutil.rmtree(base)
+            os.makedirs(base)
             
-            gdf_prodes, col_ano = montar_base_prodes_em_tempo_real()
-            shapes = [os.path.join(r, f) for r, _, fs in os.walk(base_extracao) for f in fs if f.endswith('.shp')]
+            with open("input.zip", "wb") as f: f.write(file.getbuffer())
+            with zipfile.ZipFile("input.zip", 'r') as z: z.extractall(base)
+            
+            with st.spinner("Carregando PRODES..."):
+                gdf_prodes = montar_base_prodes()
             
             resultados = []
-            for shp in shapes:
-                try:
-                    gdf_car = gpd.read_file(shp)
-                    if gdf_car.crs is None: gdf_car.set_crs("EPSG:4674", inplace=True)
-                    gdf_car = gdf_car.to_crs(gdf_prodes.crs)
-                    inter = gpd.overlay(gdf_car, gdf_prodes, how='intersection')
-                    if not inter.empty:
-                        inter['area_ha'] = inter.to_crs(epsg=31982).geometry.area / 10000
-                        resultados.append({'CAR': os.path.basename(shp), 'Area_Ha': inter['area_ha'].sum()})
-                except: continue
+            # Varredura recursiva para achar todos os .shp
+            for root, dirs, files in os.walk(base):
+                for name in files:
+                    if name.endswith(".shp"):
+                        path = os.path.join(root, name)
+                        try:
+                            gdf_car = gpd.read_file(path)
+                            if gdf_car.crs is None: gdf_car.set_crs("EPSG:4674", inplace=True)
+                            gdf_car = gdf_car.to_crs(gdf_prodes.crs)
+                            
+                            inter = gpd.overlay(gdf_car, gdf_prodes, how='intersection')
+                            if not inter.empty:
+                                inter['area_ha'] = inter.to_crs(epsg=31982).geometry.area / 10000
+                                resultados.append({'CAR': name, 'Area_Ha': round(inter['area_ha'].sum(), 4)})
+                        except Exception as e:
+                            continue
             
             if resultados:
                 df = pd.DataFrame(resultados)
                 st.dataframe(df)
-                nome_arq = "Resultado.xlsx"
-                df.to_excel(nome_arq, index=False)
-                with open(nome_arq, "rb") as f:
-                    st.download_button("📥 Baixar Excel", f, nome_arq)
-            else: st.warning("Nenhum dado encontrado.")
-            shutil.rmtree(base_extracao)
+                csv = df.to_csv(index=False).encode('utf-8')
+                st.download_button("📥 Baixar CSV", csv, "resultado.csv", "text/csv")
+            else:
+                st.warning("Nenhum dado cruzado. Verifique se os polígonos coincidem.")
+            
+            shutil.rmtree(base)
+            os.remove("input.zip")
