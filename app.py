@@ -10,13 +10,12 @@ import io
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Analisador CAR x PRODES (Fixo)", page_icon="🗺️", layout="centered")
 
-# --- FUNÇÃO ULTRARRÁPIDA COM CACHE E LIMPEZA DE COLUNAS ---
+# --- FUNÇÃO ULTRARRÁPIDA COM CACHE ---
 @st.cache_data(show_spinner=False)
 def carregar_base_prodes_fixa():
     bytes_totais = bytearray()
     contador_partes = 1
     
-    # Junta as partes salvando memória do servidor
     while os.path.exists(f"prodes_otimizado.parquet.part{contador_partes}"):
         with open(f"prodes_otimizado.parquet.part{contador_partes}", "rb") as f_parte:
             bytes_totais.extend(f_parte.read())
@@ -25,21 +24,17 @@ def carregar_base_prodes_fixa():
     if len(bytes_totais) == 0:
         return None
         
-    # Lê usando a engine pyogrio se disponível para máxima velocidade
     try:
         gdf = gpd.read_parquet(io.BytesIO(bytes_totais), engine='pyogrio')
     except:
         gdf = gpd.read_parquet(io.BytesIO(bytes_totais))
         
-    # Remove colunas pesadas que não usamos no relatório para aliviar o processador
     colunas_uteis = ['geometry']
     coluna_ano = next((col for col in gdf.columns if col.lower() in ['ano', 'year', 'class_name', 'class']), None)
     if coluna_ano:
         colunas_uteis.append(coluna_ano)
     
-    # Mantém apenas o estritamente necessário na memória
     gdf = gdf[colunas_uteis]
-        
     if gdf.crs is None: 
         gdf.set_crs("EPSG:4674", inplace=True)
         
@@ -118,24 +113,9 @@ if verificar_login():
                 if not shapes_cars:
                     st.error("❌ Nenhum polígono válido do CAR foi localizado no pacote enviado.")
                 else:
-                    with st.spinner("⚔️ Cruzando dados espaciais (CAR vs PRODES)..."):
-                        lista_gdfs = []
-                        for shp in shapes_cars:
-                            try: 
-                                # Força leitura rápida dos SHPs de entrada
-                                t_gdf = gpd.read_file(os.path.join(pasta_shapes_finais, shp))
-                                if not t_gdf.empty:
-                                    lista_gdfs.append(t_gdf)
-                            except: pass
-                        
-                        gdf_todos_cars = pd.concat(lista_gdfs, ignore_index=True)
-                        if gdf_todos_cars.crs is None: gdf_todos_cars.set_crs("EPSG:4674", inplace=True)
-                        
-                        if gdf_prodes_real.crs != gdf_todos_cars.crs:
-                            gdf_prodes_real = gdf_prodes_real.to_crs(gdf_todos_cars.crs)
-                        
-                        linhas_brutas = []
+                    with st.spinner("⚔️ Cruzando dados espaciais via Indexação Rápida..."):
                         coluna_ano_prodes = next((col for col in gdf_prodes_real.columns if col.lower() in ['ano', 'year', 'class_name', 'class']), None)
+                        linhas_finais = []
                         
                         for shp in shapes_cars:
                             car_id_limpo = shp.replace('.shp', '')
@@ -143,33 +123,52 @@ if verificar_login():
                                 gdf_imovel = gpd.read_file(os.path.join(pasta_shapes_finais, shp))
                                 if gdf_imovel.crs is None: gdf_imovel.set_crs("EPSG:4674", inplace=True)
                                 
-                                # Executa a interseção matemática otimizada
-                                intersecao = gpd.overlay(gdf_imovel, gdf_prodes_real, how='intersection')
-                                if not intersecao.empty:
-                                    intersecao_utm = intersecao.to_crs(epsg=31981)
-                                    intersecao['area_ha'] = intersecao_utm.geometry.area / 10000
-                                    for _, row in intersecao.iterrows():
-                                        ano_val = int(re.findall(r'\d+', str(row[coluna_ano_prodes]))[0]) if coluna_ano_prodes and re.findall(r'\d+', str(row[coluna_ano_prodes])) else "Inconclusivo"
-                                        linhas_brutas.append({'Identificador_do_CAR': car_id_limpo, 'Ano': ano_val, 'Area': row['area_ha']})
+                                # Ajusta o CRS se necessário
+                                if gdf_prodes_real.crs != gdf_imovel.crs:
+                                    gdf_imovel = gdf_imovel.to_crs(gdf_prodes_real.crs)
+                                
+                                # NOVO MOTOR: Mapeamento por junção espacial acelerada (sjoin)
+                                correspondencias = gpd.sjoin(gdf_imovel, gdf_prodes_real, how="inner", predicate="intersects")
+                                
+                                if not correspondencias.empty and coluna_ano_prodes:
+                                    # Agrupa os anos detectados tirando duplicados
+                                    anos_detectados = []
+                                    for val in correspondencias[coluna_ano_prodes].unique():
+                                        numeros = re.findall(r'\d+', str(val))
+                                        if numeros:
+                                            anos_detectados.append(int(numeros[0]))
+                                    
+                                    if anos_detectados:
+                                        texto_anos = ", ".join(sorted(list(set(map(str, anos_detectados)))))
+                                        
+                                        # Calcula área aproximada convertendo rápido para UTM
+                                        gdf_imovel_utm = gdf_imovel.to_crs(epsg=31981)
+                                        area_ha = round(gdf_imovel_utm.geometry.area.sum() / 10000, 2)
+                                    else:
+                                        texto_anos = "Inconclusivo"
+                                        area_ha = 0.0
+                                        
+                                    linhas_finais.append({
+                                        'Identificador_do_CAR': car_id_limpo, 
+                                        'Anos_com_Incidencia_PRODES': texto_anos, 
+                                        'Area_Total_PRODES_HA': area_ha
+                                    })
                                 else:
-                                    linhas_brutas.append({'Identificador_do_CAR': car_id_limpo, 'Ano': 'Sem PRODES', 'Area': 0.0})
-                            except: pass
-                        
-                        df_bruto = pd.DataFrame(linhas_brutas)
-                        linhas_finais = []
-                        for car_id, group in df_bruto.groupby('Identificador_do_CAR'):
-                            anos_validos = group[~group['Ano'].isin(['Sem PRODES', 'Erro na análise'])]
-                            if not anos_validos.empty:
-                                texto_anos = ", ".join(sorted(list(set(anos_validos['Ano'].astype(str)))))
-                                area_total = round(anos_validos['Area'].sum(), 2)
-                            else:
-                                texto_anos = 'Sem PRODES'
-                                area_total = 0.0
-                            linhas_finais.append({'Identificador_do_CAR': car_id, 'Anos_com_Incidencia_PRODES': texto_anos, 'Area_Total_PRODES_HA': area_total})
+                                    linhas_finais.append({
+                                        'Identificador_do_CAR': car_id_limpo, 
+                                        'Anos_com_Incidencia_PRODES': 'Sem PRODES', 
+                                        'Area_Total_PRODES_HA': 0.0
+                                    })
+                            except:
+                                linhas_finais.append({
+                                    'Identificador_do_CAR': car_id_limpo, 
+                                    'Anos_com_Incidencia_PRODES': 'Erro na análise', 
+                                    'Area_Total_PRODES_HA': 0.0
+                                })
                         
                         df_final = pd.DataFrame(linhas_finais).sort_values(by='Identificador_do_CAR')
                         
-                        st.success("🎉 Mapeamento concluído!")
+                        st.success("🎉 Mapeamento concluído com sucesso!")
                         st.dataframe(df_final)
                         
                         nome_saida = 'Relatorio_PRODES_Fixo.xlsx'
