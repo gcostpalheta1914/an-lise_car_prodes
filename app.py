@@ -87,8 +87,6 @@ if verificar_login():
                 st.error("❌ Erro: Não foi possível ler as 10 partes do PRODES no seu GitHub.")
             else:
                 gdf_prodes_real, coluna_ano_prodes = resultado_prodes
-                
-                # Garante que as geometrias do PRODES estão perfeitamente válidas
                 gdf_prodes_real['geometry'] = gdf_prodes_real.geometry.make_valid()
                 
                 with st.spinner("📦 Extraindo arquivos de formato dos CARs..."):
@@ -114,7 +112,8 @@ if verificar_login():
                                             if ext in ['.shp', '.shx', '.dbf', '.prj']:
                                                 with sub_zip.open(f_interno) as z_in, open(os.path.join(pasta_shapes_finais, f"{codigo_car}{ext}"), 'wb') as f_out:
                                                     shutil.copyfileobj(z_in, f_out)
-                                except: pass
+                                except:
+                                    pass
                             elif arquivo.endswith('.shp'):
                                 try:
                                     if not codigo_car:
@@ -122,4 +121,73 @@ if verificar_login():
                                         codigo_car = match_sub.group(1) if match_sub else os.path.splitext(arquivo)[0]
                                     nome_base = os.path.splitext(arquivo)[0]
                                     for ext in ['.shp', '.shx', '.dbf', '.prj']:
-                                        arq_
+                                        arq_origem = os.path.join(raiz, f"{nome_base}{ext}")
+                                        if os.path.exists(arq_origem):
+                                            shutil.copy(arq_origem, os.path.join(pasta_shapes_finais, f"{codigo_car}{ext}"))
+                                except:
+                                    pass
+
+                shapes_cars = [f for f in os.listdir(pasta_shapes_finais) if f.endswith('.shp')]
+                
+                if not shapes_cars:
+                    st.error("❌ Nenhum polígono válido do CAR foi localizado no pacote enviado.")
+                else:
+                    with st.spinner("⚔️ Processando recorte espacial exato (Pode demorar, calculando áreas)..."):
+                        linhas_brutas = []
+                        
+                        for shp in shapes_cars:
+                            car_id_limpo = shp.replace('.shp', '')
+                            try:
+                                gdf_imovel = gpd.read_file(os.path.join(pasta_shapes_finais, shp))
+                                if gdf_imovel.empty: continue
+                                
+                                gdf_imovel['geometry'] = gdf_imovel.geometry.make_valid()
+                                if gdf_imovel.crs is None: gdf_imovel.set_crs("EPSG:4674", inplace=True)
+                                if gdf_prodes_real.crs != gdf_imovel.crs:
+                                    gdf_imovel = gdf_imovel.to_crs(gdf_prodes_real.crs)
+                                
+                                intersecao = gpd.overlay(gdf_imovel, gdf_prodes_real, how='intersection')
+                                
+                                if not intersecao.empty:
+                                    lon_centro = gdf_imovel.geometry.centroid.x.iloc[0]
+                                    zona_utm = int((lon_centro + 180) / 6) + 1
+                                    epsg_utm = f"3198{zona_utm}" if gdf_imovel.geometry.centroid.y.iloc[0] < 0 else f"3197{zona_utm}"
+                                    
+                                    intersecao_utm = intersecao.to_crs(num=int(epsg_utm))
+                                    intersecao['area_ha'] = intersecao_utm.geometry.area / 10000
+                                    
+                                    for _, row in intersecao.iterrows():
+                                        if row['area_ha'] > 0.0001:
+                                            ano_val = "Identificado"
+                                            if coluna_ano_prodes and coluna_ano_prodes in row:
+                                                numeros = re.findall(r'\d+', str(row[coluna_ano_prodes]))
+                                                if numeros:
+                                                    ano_val = int(numeros[0])
+                                            
+                                            linhas_brutas.append({'Identificador_do_CAR': car_id_limpo, 'Ano': ano_val, 'Area': row['area_ha']})
+                                else:
+                                    linhas_brutas.append({'Identificador_do_CAR': car_id_limpo, 'Ano': 'Sem PRODES', 'Area': 0.0})
+                            except:
+                                linhas_brutas.append({'Identificador_do_CAR': car_id_limpo, 'Ano': 'Erro na análise', 'Area': 0.0})
+                        
+                        if linhas_brutas:
+                            df_bruto = pd.DataFrame(linhas_brutas)
+                            linhas_finais = []
+                            for car_id, group in df_bruto.groupby('Identificador_do_CAR'):
+                                anos_validos = group[~group['Ano'].isin(['Sem PRODES', 'Erro na análise'])]
+                                if not anos_validos.empty:
+                                    lista_anos = sorted(list(set(anos_validos['Ano'].astype(str))))
+                                    texto_anos = ", ".join(lista_anos)
+                                    area_total = round(anos_validos['Area'].sum(), 2)
+                                else:
+                                    texto_anos = 'Sem PRODES'
+                                    area_total = 0.0
+                                linhas_finais.append({'Identificador_do_CAR': car_id, 'Anos_com_Incidencia_PRODES': texto_anos, 'Area_Total_PRODES_HA': area_total})
+                            
+                            df_final = pd.DataFrame(linhas_finais).sort_values(by='Identificador_do_CAR')
+                            st.success("🎉 Mapeamento concluído com precisão cirúrgica!")
+                            st.dataframe(df_final)
+                            
+                            nome_saida = 'Relatorio_PRODES_Preciso.xlsx'
+                            df_final.to_excel(nome_saida, index=False)
+                            with open(nome_saida, "rb") as
