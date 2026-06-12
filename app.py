@@ -92,21 +92,40 @@ if verificar_login():
                     with zipfile.ZipFile("cars_input.zip", 'r') as z:
                         z.extractall(base_extracao)
 
+                    # Varredura inteligente de qualquer arquivo zip ou pasta aninhada
                     for raiz, _, arquivos in os.walk(base_extracao):
+                        # Tenta pegar o código do CAR pelo nome da pasta ou usa o nome do arquivo zip encontrado
                         match_car = re.search(r'(PA-\d{7}-[A-F0-9]+)', raiz, re.IGNORECASE)
-                        if match_car:
-                            codigo_car = match_car.group(1)
-                            for arquivo in arquivos:
-                                if "área do imóvel" in arquivo.lower() or arquivo.endswith('.zip'):
-                                    try:
-                                        with zipfile.ZipFile(os.path.join(raiz, arquivo), 'r') as sub_zip:
-                                            for f_interno in sub_zip.nanelist():
-                                                ext = os.path.splitext(f_interno)[1].lower()
-                                                if ext in ['.shp', '.shx', '.dbf', '.prj']:
-                                                    nome_final = f"{codigo_car}{ext}"
-                                                    with sub_zip.open(f_interno) as z_in, open(os.path.join(pasta_shapes_finais, nome_final), 'wb') as f_out:
-                                                        shutil.copyfileobj(z_in, f_out)
-                                    except: pass
+                        codigo_car = match_car.group(1) if match_car else None
+                        
+                        for arquivo in arquivos:
+                            caminho_completo = os.path.join(raiz, arquivo)
+                            if arquivo.endswith('.zip'):
+                                try:
+                                    if not codigo_car:
+                                        match_sub = re.search(r'(PA-\d{7}-[A-F0-9]+)', arquivo, re.IGNORECASE)
+                                        codigo_car = match_sub.group(1) if match_sub else os.path.splitext(arquivo)[0]
+                                        
+                                    with zipfile.ZipFile(caminho_completo, 'r') as sub_zip:
+                                        for f_interno in sub_zip.namelist():
+                                            ext = os.path.splitext(f_interno)[1].lower()
+                                            if ext in ['.shp', '.shx', '.dbf', '.prj']:
+                                                nome_final = f"{codigo_car}{ext}"
+                                                with sub_zip.open(f_interno) as z_in, open(os.path.join(pasta_shapes_finais, nome_final), 'wb') as f_out:
+                                                    shutil.copyfileobj(z_in, f_out)
+                                except: pass
+                            elif arquivo.endswith('.shp'):
+                                try:
+                                    if not codigo_car:
+                                        match_sub = re.search(r'(PA-\d{7}-[A-F0-9]+)', arquivo, re.IGNORECASE)
+                                        codigo_car = match_sub.group(1) if match_sub else os.path.splitext(arquivo)[0]
+                                    
+                                    nome_base = os.path.splitext(arquivo)[0]
+                                    for ext in ['.shp', '.shx', '.dbf', '.prj']:
+                                        arq_origem = os.path.join(raiz, f"{nome_base}{ext}")
+                                        if os.path.exists(arq_origem):
+                                            shutil.copy(arq_origem, os.path.join(pasta_shapes_finais, f"{codigo_car}{ext}"))
+                                except: pass
 
                 shapes_cars = [f for f in os.listdir(pasta_shapes_finais) if f.endswith('.shp')]
                 
@@ -121,28 +140,31 @@ if verificar_login():
                             car_id_limpo = shp.replace('.shp', '')
                             try:
                                 gdf_imovel = gpd.read_file(os.path.join(pasta_shapes_finais, shp))
+                                if gdf_imovel.empty: continue
+                                
                                 if gdf_imovel.crs is None: gdf_imovel.set_crs("EPSG:4674", inplace=True)
                                 
                                 if gdf_prodes_real.crs != gdf_imovel.crs:
                                     gdf_imovel = gdf_imovel.to_crs(gdf_prodes_real.crs)
                                 
-                                # 1. Pré-filtro rápido
                                 prodes_concorrentes = gpd.sjoin(gdf_prodes_real, gdf_imovel, how="inner", predicate="intersects")
                                 
                                 if not prodes_concorrentes.empty:
                                     prodes_concorrentes = prodes_concorrentes.drop(columns=['index_right'], errors='ignore')
-                                    
-                                    # 2. Recorte exato
                                     intersecao_real = gpd.overlay(gdf_imovel, prodes_concorrentes, how='intersection')
                                     
                                     if not intersecao_real.empty:
-                                        # DESCOBRE A PROJEÇÃO UTM IDEAL DINAMICAMENTE PARA EVITAR DISTORÇÕES
-                                        lon_centro = gdf_imovel.geometry.centroid.x.iloc[0]
-                                        zona_utm = int((lon_centro + 180) / 6) + 1
-                                        epsg_utm = f"3198{zona_utm}" if gdf_imovel.geometry.centroid.y.iloc[0] < 0 else f"3197{zona_utm}"
+                                        # Descobre zona UTM dinamicamente com fallback de segurança se falhar
+                                        try:
+                                            lon_centro = gdf_imovel.geometry.centroid.x.iloc[0]
+                                            lat_centro = gdf_imovel.geometry.centroid.y.iloc[0]
+                                            zona_utm = int((lon_centro + 180) / 6) + 1
+                                            epsg_utm = f"3198{zona_utm}" if lat_centro < 0 else f"3197{zona_utm}"
+                                            epsg_final = int(epsg_utm)
+                                        except:
+                                            epsg_final = 31981 # Fallback padrão Pará Zona 21S
                                         
-                                        # Reprojeta com precisão
-                                        intersecao_utm = intersecao_real.to_crs(num=int(epsg_utm))
+                                        intersecao_utm = intersecao_real.to_crs(num=epsg_final)
                                         intersecao_real['area_calculada_ha'] = intersecao_utm.geometry.area / 10000
                                         
                                         anos_detectados = set()
@@ -156,9 +178,9 @@ if verificar_login():
                                                 if numeros:
                                                     anos_detectados.add(str(numeros[0]))
                                         
-                                        if anos_detectados:
+                                        if list(anos_detectados):
                                             texto_anos = ", ".join(sorted(list(anos_detectados)))
-                                            area_final_ha = round(area_acumulada_prodes, 4) # Aumenta casas decimais para validação
+                                            area_final_ha = round(area_acumulada_prodes, 2)
                                         else:
                                             texto_anos = "Sem PRODES"
                                             area_final_ha = 0.0
@@ -172,7 +194,7 @@ if verificar_login():
                                 linhas_finais.append({
                                     'Identificador_do_CAR': car_id_limpo, 
                                     'Anos_com_Incidencia_PRODES': texto_anos, 
-                                    'Area_Total_PRODES_HA': round(area_final_ha, 2) # Exibe bonito arredondando no final
+                                    'Area_Total_PRODES_HA': area_final_ha
                                 })
                                 
                             except Exception as e:
