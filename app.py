@@ -5,9 +5,34 @@ import shutil
 import geopandas as gpd
 import pandas as pd
 import re
+import io
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Analisador CAR x PRODES (Fixo)", page_icon="🗺️", layout="centered")
+
+# --- FUNÇÃO OTIMIZADA COM CACHE (Evita o site cair por falta de memória) ---
+@st.cache_data(show_spinner=False)
+def carregar_base_prodes_fixa():
+    bytes_totais = bytearray()
+    contador_partes = 1
+    
+    # Junta os pedaços salvando memória do servidor
+    while os.path.exists(f"prodes_otimizado.parquet.part{contador_partes}"):
+        with open(f"prodes_otimizado.parquet.part{contador_partes}", "rb") as f_parte:
+            bytes_totais.extend(f_parte.read())
+        contador_partes += 1
+        
+    if len(bytes_totais) == 0:
+        return None
+        
+    # Lê o dataframe geométrico compactado
+    gdf = gpd.read_parquet(io.BytesIO(bytes_totais))
+    
+    # Garante o sistema de coordenadas leve padrão do Brasil (SIRGAS 2000)
+    if gdf.crs is None: 
+        gdf.set_crs("EPSG:4674", inplace=True)
+        
+    return gdf
 
 # --- SISTEMA DE LOGIN ---
 def verificar_login():
@@ -36,25 +61,24 @@ if verificar_login():
         st.rerun()
 
     st.title("🗺️ Detector de Passivos: CAR vs PRODES (Base Fixa)")
-    st.markdown("Com a base estável instalada, basta subir os CARs e processar.")
+    st.markdown("A base estável foi instalada com sucesso. Suba os CARs para processar.")
 
-    # VEJA: Agora só existe UM campo de upload! O PRODES sumiu da tela!
     cars_file = st.file_uploader("Suba o arquivo comprimido dos CARs (CARS.zip)", type=["zip"])
 
     if st.button("🚀 Rodar Cruzamento Espacial"):
         if cars_file is not None:
             base_extracao = 'tmp_cars_extracao'
             pasta_shapes_finais = 'tmp_shapes_prontos'
-            caminho_parquet_prodes = "prodes_otimizado.parquet" # Procurado direto no repositório
             
-            # Limpeza de pastas temporárias
             for p in [base_extracao, pasta_shapes_finais]:
                 if os.path.exists(p): shutil.rmtree(p)
                 os.makedirs(p, exist_ok=True)
                 
-            # 1. Verifica se você já enviou o arquivo fixo para o GitHub
-            if not os.path.exists(caminho_parquet_prodes):
-                st.error("❌ Erro Crítico: A base fixa 'prodes_otimizado.parquet' não foi encontrada no GitHub. Rode o script 'converter.py' no seu computador primeiro para injetá-la aqui!")
+            with st.spinner("⚡ Carregando inteligência geográfica do PRODES..."):
+                gdf_prodes_real = carregar_base_prodes_fixa()
+                
+            if gdf_prodes_real is None:
+                st.error("❌ Erro Crítico: As partes da base 'prodes_otimizado.parquet' não estão acessíveis no GitHub.")
             else:
                 with st.spinner("📦 Extraindo polígonos dos CARs enviados..."):
                     with open("cars_input.zip", "wb") as f:
@@ -62,7 +86,6 @@ if verificar_login():
                     with zipfile.ZipFile("cars_input.zip", 'r') as z:
                         z.extractall(base_extracao)
 
-                    # Varredura inteligente de subpastas do CAR
                     for raiz, _, arquivos in os.walk(base_extracao):
                         match_car = re.search(r'(PA-\d{7}-[A-F0-9]+)', raiz, re.IGNORECASE)
                         if match_car:
@@ -84,8 +107,7 @@ if verificar_login():
                 if not shapes_cars:
                     st.error("❌ Nenhum polígono válido do CAR foi localizado no pacote enviado.")
                 else:
-                    with st.spinner("⚡ Carregando Base PRODES Fixa e Cruzando Dados Espaciais..."):
-                        # Lendo os CARs enviados
+                    with st.spinner("⚔️ Cruzando dados espaciais (CAR vs PRODES)..."):
                         lista_gdfs = []
                         for shp in shapes_cars:
                             try: lista_gdfs.append(gpd.read_file(os.path.join(pasta_shapes_finais, shp)))
@@ -94,16 +116,12 @@ if verificar_login():
                         gdf_todos_cars = pd.concat(lista_gdfs, ignore_index=True)
                         if gdf_todos_cars.crs is None: gdf_todos_cars.set_crs("EPSG:4674", inplace=True)
                         
-                        # MÁGICA: Abre o arquivo ultraleve Parquet direto da raiz do site
-                        gdf_prodes_real = gpd.read_parquet(caminho_parquet_prodes)
-                        if gdf_prodes_real.crs is None: gdf_prodes_real.set_crs("EPSG:4674", inplace=True)
                         if gdf_prodes_real.crs != gdf_todos_cars.crs:
                             gdf_prodes_real = gdf_prodes_real.to_crs(gdf_todos_cars.crs)
                         
                         linhas_brutas = []
                         coluna_ano_prodes = next((col for col in gdf_prodes_real.columns if col.lower() in ['ano', 'year', 'class_name', 'class']), None)
                         
-                        # Realiza a interseção geométrica rápida
                         for shp in shapes_cars:
                             car_id_limpo = shp.replace('.shp', '')
                             try:
@@ -121,7 +139,6 @@ if verificar_login():
                                     linhas_brutas.append({'Identificador_do_CAR': car_id_limpo, 'Ano': 'Sem PRODES', 'Area': 0.0})
                             except: pass
                         
-                        # Agrupa e formata os dados para o painel
                         df_bruto = pd.DataFrame(linhas_brutas)
                         linhas_finais = []
                         for car_id, group in df_bruto.groupby('Identificador_do_CAR'):
@@ -139,13 +156,11 @@ if verificar_login():
                         st.success("🎉 Mapeamento concluído com a base fixa!")
                         st.dataframe(df_final)
                         
-                        # Botão para baixar a planilha gerada
                         nome_saida = 'Relatorio_PRODES_Fixo.xlsx'
                         df_final.to_excel(nome_saida, index=False)
                         with open(nome_saida, "rb") as file:
                             st.download_button(label="📥 Baixar Planilha Excel Oficial", data=file, file_name=nome_saida, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             
-            # Limpeza final de resíduos
             for p in [base_extracao, pasta_shapes_finais, "cars_input.zip"]:
                 if os.path.exists(p): shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
         else:
