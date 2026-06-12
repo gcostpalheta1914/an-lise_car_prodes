@@ -10,13 +10,13 @@ import io
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Analisador CAR x PRODES (Fixo)", page_icon="🗺️", layout="centered")
 
-# --- FUNÇÃO OTIMIZADA COM CACHE (Evita o site cair por falta de memória) ---
+# --- FUNÇÃO ULTRARRÁPIDA COM CACHE E LIMPEZA DE COLUNAS ---
 @st.cache_data(show_spinner=False)
 def carregar_base_prodes_fixa():
     bytes_totais = bytearray()
     contador_partes = 1
     
-    # Junta os pedaços salvando memória do servidor
+    # Junta as partes salvando memória do servidor
     while os.path.exists(f"prodes_otimizado.parquet.part{contador_partes}"):
         with open(f"prodes_otimizado.parquet.part{contador_partes}", "rb") as f_parte:
             bytes_totais.extend(f_parte.read())
@@ -25,10 +25,21 @@ def carregar_base_prodes_fixa():
     if len(bytes_totais) == 0:
         return None
         
-    # Lê o dataframe geométrico compactado
-    gdf = gpd.read_parquet(io.BytesIO(bytes_totais))
+    # Lê usando a engine pyogrio se disponível para máxima velocidade
+    try:
+        gdf = gpd.read_parquet(io.BytesIO(bytes_totais), engine='pyogrio')
+    except:
+        gdf = gpd.read_parquet(io.BytesIO(bytes_totais))
+        
+    # Remove colunas pesadas que não usamos no relatório para aliviar o processador
+    colunas_uteis = ['geometry']
+    coluna_ano = next((col for col in gdf.columns if col.lower() in ['ano', 'year', 'class_name', 'class']), None)
+    if coluna_ano:
+        colunas_uteis.append(coluna_ano)
     
-    # Garante o sistema de coordenadas leve padrão do Brasil (SIRGAS 2000)
+    # Mantém apenas o estritamente necessário na memória
+    gdf = gdf[colunas_uteis]
+        
     if gdf.crs is None: 
         gdf.set_crs("EPSG:4674", inplace=True)
         
@@ -110,7 +121,11 @@ if verificar_login():
                     with st.spinner("⚔️ Cruzando dados espaciais (CAR vs PRODES)..."):
                         lista_gdfs = []
                         for shp in shapes_cars:
-                            try: lista_gdfs.append(gpd.read_file(os.path.join(pasta_shapes_finais, shp)))
+                            try: 
+                                # Força leitura rápida dos SHPs de entrada
+                                t_gdf = gpd.read_file(os.path.join(pasta_shapes_finais, shp))
+                                if not t_gdf.empty:
+                                    lista_gdfs.append(t_gdf)
                             except: pass
                         
                         gdf_todos_cars = pd.concat(lista_gdfs, ignore_index=True)
@@ -128,6 +143,7 @@ if verificar_login():
                                 gdf_imovel = gpd.read_file(os.path.join(pasta_shapes_finais, shp))
                                 if gdf_imovel.crs is None: gdf_imovel.set_crs("EPSG:4674", inplace=True)
                                 
+                                # Executa a interseção matemática otimizada
                                 intersecao = gpd.overlay(gdf_imovel, gdf_prodes_real, how='intersection')
                                 if not intersecao.empty:
                                     intersecao_utm = intersecao.to_crs(epsg=31981)
@@ -153,7 +169,7 @@ if verificar_login():
                         
                         df_final = pd.DataFrame(linhas_finais).sort_values(by='Identificador_do_CAR')
                         
-                        st.success("🎉 Mapeamento concluído com a base fixa!")
+                        st.success("🎉 Mapeamento concluído!")
                         st.dataframe(df_final)
                         
                         nome_saida = 'Relatorio_PRODES_Fixo.xlsx'
