@@ -5,19 +5,29 @@ import os, zipfile, shutil
 
 st.set_page_config(layout="centered")
 
-if "auth" not in st.session_state: st.session_state.auth = False
+# --- CONTROLE DE ACESSO ---
+if "auth" not in st.session_state:
+    st.session_state.auth = False
 
 if not st.session_state.auth:
-    if st.text_input("Senha", type="password") == "Gab1914.":
-        st.session_state.auth = True
-        st.rerun()
-else:
-    st.title("Analisador Direto")
-    f_p = st.file_uploader("PRODES (Zip)", type="zip")
-    f_c = st.file_uploader("CARs (Zip)", type="zip")
-    
-    if st.button("Processar"):
-        if f_p and f_c:
+    senha = st.text_input("Senha", type="password")
+    if st.button("Entrar"):
+        if senha == "Gab1914.":
+            st.session_state.auth = True
+            st.rerun()
+        else:
+            st.error("Senha incorreta!")
+    st.stop() # Interrompe a execução aqui se não estiver autenticado
+
+# --- APLICATIVO PRINCIPAL (só carrega se auth for True) ---
+st.title("🗺️ Analisador Geográfico")
+
+f_p = st.file_uploader("Upload PRODES (Zip)", type="zip")
+f_c = st.file_uploader("Upload CARs (Zip)", type="zip")
+
+if st.button("Processar"):
+    if f_p and f_c:
+        with st.spinner("Processando..."):
             os.makedirs("data", exist_ok=True)
             with zipfile.ZipFile(f_p, 'r') as z: z.extractall("data/prodes")
             with zipfile.ZipFile(f_c, 'r') as z: z.extractall("data/cars")
@@ -37,10 +47,9 @@ else:
                             res.append({"Arquivo": f, "Ha": round(ha, 2)})
             
             if res:
-                df = pd.DataFrame(res)
-                st.dataframe(df)
+                st.dataframe(pd.DataFrame(res))
             else:
-                st.warning("Sem interseções.")
+                st.warning("Nenhuma interseção encontrada.")
             shutil.rmtree("data")
-        else:
-            st.error("Suba os arquivos!")
+    else:
+        st.error("Suba os arquivos!")
