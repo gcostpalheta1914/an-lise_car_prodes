@@ -8,7 +8,7 @@ import re
 import io
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Analisador CAR x PRODES (Fixo)", page_icon="🗺️", layout="centered")
+st.set_page_config(page_title="Analisador CAR x PRODES (Alta Precisão)", page_icon="🗺️", layout="centered")
 
 # --- FUNÇÃO ULTRARRÁPIDA COM CACHE ---
 @st.cache_data(show_spinner=False)
@@ -66,8 +66,8 @@ if verificar_login():
         st.session_state["autenticado"] = False
         st.rerun()
 
-    st.title("🗺️ Detector de Passivos: CAR vs PRODES (Base Fixa)")
-    st.markdown("A base estável foi instalada com sucesso. Suba os CARs para processar.")
+    st.title("🗺️ Detector de Passivos: CAR vs PRODES (Alta Precisão)")
+    st.markdown("Base carregada com sucesso. Pronto para processamento com correção de distorção UTM.")
 
     cars_file = st.file_uploader("Suba o arquivo comprimido dos CARs (CARS.zip)", type=["zip"])
 
@@ -100,7 +100,7 @@ if verificar_login():
                                 if "área do imóvel" in arquivo.lower() or arquivo.endswith('.zip'):
                                     try:
                                         with zipfile.ZipFile(os.path.join(raiz, arquivo), 'r') as sub_zip:
-                                            for f_interno in sub_zip.namelist():
+                                            for f_interno in sub_zip.nanelist():
                                                 ext = os.path.splitext(f_interno)[1].lower()
                                                 if ext in ['.shp', '.shx', '.dbf', '.prj']:
                                                     nome_final = f"{codigo_car}{ext}"
@@ -113,7 +113,7 @@ if verificar_login():
                 if not shapes_cars:
                     st.error("❌ Nenhum polígono válido do CAR foi localizado no pacote enviado.")
                 else:
-                    with st.spinner("⚔️ Executando Cruzamento Otimizado (Filtro Rápido + Recorte Exato)..."):
+                    with st.spinner("⚔️ Executando Cruzamento Geográfico de Alta Precisão..."):
                         coluna_ano_prodes = next((col for col in gdf_prodes_real.columns if col.lower() in ['ano', 'year', 'class_name', 'class']), None)
                         linhas_finais = []
                         
@@ -126,19 +126,23 @@ if verificar_login():
                                 if gdf_prodes_real.crs != gdf_imovel.crs:
                                     gdf_imovel = gdf_imovel.to_crs(gdf_prodes_real.crs)
                                 
-                                # PASSO 1: Pré-filtro espacial rápido (sjoin) para achar apenas o PRODES que interessa
+                                # 1. Pré-filtro rápido
                                 prodes_concorrentes = gpd.sjoin(gdf_prodes_real, gdf_imovel, how="inner", predicate="intersects")
                                 
                                 if not prodes_concorrentes.empty:
-                                    # Limpa colunas do sjoin para evitar conflito no overlay
                                     prodes_concorrentes = prodes_concorrentes.drop(columns=['index_right'], errors='ignore')
                                     
-                                    # PASSO 2: Recorte preciso (overlay) apenas nos polígonos pré-filtrados
+                                    # 2. Recorte exato
                                     intersecao_real = gpd.overlay(gdf_imovel, prodes_concorrentes, how='intersection')
                                     
                                     if not intersecao_real.empty:
-                                        # Projeta para UTM para calcular a área exata em hectares (HA)
-                                        intersecao_utm = intersecao_real.to_crs(epsg=31981)
+                                        # DESCOBRE A PROJEÇÃO UTM IDEAL DINAMICAMENTE PARA EVITAR DISTORÇÕES
+                                        lon_centro = gdf_imovel.geometry.centroid.x.iloc[0]
+                                        zona_utm = int((lon_centro + 180) / 6) + 1
+                                        epsg_utm = f"3198{zona_utm}" if gdf_imovel.geometry.centroid.y.iloc[0] < 0 else f"3197{zona_utm}"
+                                        
+                                        # Reprojeta com precisão
+                                        intersecao_utm = intersecao_real.to_crs(num=int(epsg_utm))
                                         intersecao_real['area_calculada_ha'] = intersecao_utm.geometry.area / 10000
                                         
                                         anos_detectados = set()
@@ -146,16 +150,15 @@ if verificar_login():
                                         
                                         for _, row in intersecao_real.iterrows():
                                             area_linha = row['area_calculada_ha']
-                                            if area_linha > 0.001:  # Ignora微 ruidos geométricos menores que 10m²
-                                                area_acumulada_prodes += area_linha
-                                                if coluna_ano_prodes:
-                                                    numeros = re.findall(r'\d+', str(row[coluna_ano_prodes]))
-                                                    if numeros:
-                                                        anos_detectados.add(str(numeros[0]))
+                                            area_acumulada_prodes += area_linha
+                                            if coluna_ano_prodes:
+                                                numeros = re.findall(r'\d+', str(row[coluna_ano_prodes]))
+                                                if numeros:
+                                                    anos_detectados.add(str(numeros[0]))
                                         
                                         if anos_detectados:
                                             texto_anos = ", ".join(sorted(list(anos_detectados)))
-                                            area_final_ha = round(area_acumulada_prodes, 2)
+                                            area_final_ha = round(area_acumulada_prodes, 4) # Aumenta casas decimais para validação
                                         else:
                                             texto_anos = "Sem PRODES"
                                             area_final_ha = 0.0
@@ -169,7 +172,7 @@ if verificar_login():
                                 linhas_finais.append({
                                     'Identificador_do_CAR': car_id_limpo, 
                                     'Anos_com_Incidencia_PRODES': texto_anos, 
-                                    'Area_Total_PRODES_HA': area_final_ha
+                                    'Area_Total_PRODES_HA': round(area_final_ha, 2) # Exibe bonito arredondando no final
                                 })
                                 
                             except Exception as e:
@@ -181,7 +184,7 @@ if verificar_login():
                         
                         df_final = pd.DataFrame(linhas_finais).sort_values(by='Identificador_do_CAR')
                         
-                        st.success("🎉 Mapeamento preciso concluído!")
+                        st.success("🎉 Mapeamento de alta precisão concluído!")
                         st.dataframe(df_final)
                         
                         nome_saida = 'Relatorio_PRODES_Fixo.xlsx'
