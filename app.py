@@ -40,7 +40,7 @@ if verificar_login():
     st.title("🗺️ Detector de Passivos: CAR vs PRODES")
     st.markdown("Preencha os campos para rodar o cruzamento automático espacial.")
 
-    # Exibe os dois campos na tela de forma otimizada
+    # Os dois campos de upload que você prefere manter
     cars_file = st.file_uploader("1. Suba o arquivo dos CARs (CARS.zip)", type=["zip"])
     prodes_file = st.file_uploader("2. Suba o arquivo do PRODES (PRODES_2008_A_2023.zip) — Apenas se for a primeira vez na sessão", type=["zip"])
 
@@ -83,7 +83,7 @@ if verificar_login():
             else:
                 with st.spinner("🗺️ Alinhando base cartográfica do PRODES..."):
                     
-                    # Se o usuário subiu o PRODES agora, salva na pasta persistente do servidor
+                    # Se você subir o PRODES, ele salva na pasta temporária do servidor
                     if prodes_file is not None:
                         if os.path.exists(pasta_prodes_memoria): shutil.rmtree(pasta_prodes_memoria)
                         os.makedirs(pasta_prodes_memoria, exist_ok=True)
